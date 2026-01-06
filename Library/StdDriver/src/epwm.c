@@ -195,6 +195,89 @@ uint32_t EPWM_ConfigOutputChannel(EPWM_T *epwm, uint32_t u32ChannelNum, uint32_t
 }
 
 /**
+ * @brief This function Configure EPWM generator and get the nearest frequency in Up-Down counter type auto-reload mode
+ * @param[in] epwm The pointer of the specified EPWM module
+ *                - EPWM0 : EPWM Group 0
+ *                - EPWM1 : EPWM Group 1
+ * @param[in] u32ChannelNum EPWM channel number. Valid values are between 0~5
+ * @param[in] u32Frequency Target generator frequency
+ * @param[in] u32DutyCycle Target generator duty cycle percentage. Valid range are between 0 ~ 100. 10 means 10%, 20 means 20%...
+ * @return Nearest frequency clock in nano second
+ * @note This function is used for initial stage.
+ *       To change duty cycle later, it should get the configured period value and calculate the new comparator value.
+ *		 This is used for setup EPWM different channel work in Center Aligned mode.
+ */
+uint32_t EPWM_ConfigOutputChannelCenterAligned(EPWM_T *epwm, uint32_t u32ChannelNum, uint32_t u32Frequency, uint32_t u32DutyCycle)
+{
+    uint32_t u32Src;
+    uint32_t u32EPWMClockSrc;
+    uint32_t i;
+    uint32_t u32Prescale = 1U, u32CNR = 0xFFFFU;
+    uint32_t u32ChannelMask = 1U << u32ChannelNum;
+
+    // parameter check
+    if((u32ChannelNum > 5) || (u32DutyCycle > 100))
+    {
+        return 0;
+    }
+
+    if(epwm == EPWM0)
+    {
+        u32Src = CLK->CLKSEL2 & CLK_CLKSEL2_EPWM0SEL_Msk;
+    }
+    else     /* (epwm == EPWM1) */
+    {
+        u32Src = CLK->CLKSEL2 & CLK_CLKSEL2_EPWM1SEL_Msk;
+    }
+
+    if(u32Src == 0U)
+    {
+        /* clock source is from PLL clock */
+        u32EPWMClockSrc = CLK_GetPLLClockFreq();
+    }
+    else
+    {
+        /* clock source is from PCLK */
+        SystemCoreClockUpdate();
+        if(epwm == EPWM0)
+        {
+            u32EPWMClockSrc = CLK_GetPCLK0Freq();
+        }
+        else     /* (epwm == EPWM1) */
+        {
+            u32EPWMClockSrc = CLK_GetPCLK1Freq();
+        }
+    }
+
+    for(u32Prescale = 1U; u32Prescale < 0xFFFU; u32Prescale++)
+    {
+        i = (u32EPWMClockSrc / (u32Frequency * 2U)) / u32Prescale;
+        if(i < (0x10000U))
+        {
+            u32CNR = i;
+            break;
+        }
+    }
+    i = u32EPWMClockSrc / (u32Prescale * u32CNR * 2U);
+
+    /* convert to real register value */
+    u32Prescale -= 1U;
+    EPWM_SET_PRESCALER(epwm, u32ChannelNum, u32Prescale);
+    
+    /* set EPWM to up down counter type and auto-reload mode */
+    (epwm)->CTL1 = ((epwm)->CTL1 & ~((EPWM_CTL1_CNTTYPE0_Msk << (u32ChannelNum << 1U))|((1UL << EPWM_CTL1_CNTMODE0_Pos) << u32ChannelNum)));
+    EPWM_SET_ALIGNED_TYPE(epwm, u32ChannelMask, EPWM_CENTER_ALIGNED);
+
+    u32CNR -= 1U;
+    EPWM_SET_CNR(epwm, u32ChannelNum, u32CNR);
+    EPWM_SET_CMR(epwm, u32ChannelNum, u32DutyCycle * (u32CNR + 1U) / 100U);
+
+    EPWM_SET_OUTPUT_LEVEL(epwm, u32ChannelMask, EPWM_OUTPUT_HIGH, EPWM_OUTPUT_LOW, EPWM_OUTPUT_LOW, EPWM_OUTPUT_HIGH);
+
+    return(i);
+}
+
+/**
  * @brief Start EPWM module
  * @param[in] epwm The pointer of the specified EPWM module
  *                - EPWM0 : EPWM Group 0
